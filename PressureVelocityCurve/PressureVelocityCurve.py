@@ -45,7 +45,7 @@ def Calibrate():
     scale_factor = ruler_length/(np.max(y_scale_pixels) - np.min(y_scale_pixels))
 
     cv2.imshow("diff", diff[int(diff.shape[0]*0):int(diff.shape[0]*0.9), int(diff.shape[1]*0.5):int(diff.shape[1]*0.9)])
-    cv2.imwrite(str(Path(__file__).resolve().parent) + "/Ruler.png", diff)
+    #cv2.imwrite(str(Path(__file__).resolve().parent) + "/Ruler.png", diff)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
     return scale_factor;
@@ -105,14 +105,14 @@ def ProcessResults(): # ADD INPUT SCALE FACTOR HERE TO RETURN ACCURATE RESULTS
         #print(dimensions)
 
         cv2.imshow("First", first_image[int(first_image.shape[0]*0.2):int(first_image.shape[0]*0.9), int(first_image.shape[1]*0.4):int(first_image.shape[1]*0.6)])
-        cv2.imwrite(str(Path(__file__).resolve().parent) + "/first.png", first_image[int(first_image.shape[0]*0.2):int(first_image.shape[0]*0.9), int(first_image.shape[1]*0.4):int(first_image.shape[1]*0.6)])
+        #cv2.imwrite(str(Path(__file__).resolve().parent) + "/first.png", first_image[int(first_image.shape[0]*0.2):int(first_image.shape[0]*0.9), int(first_image.shape[1]*0.4):int(first_image.shape[1]*0.6)])
 
         cv2.imshow("last", last_image[int(last_image.shape[0]*0.2):int(last_image.shape[0]*0.9), int(last_image.shape[1]*0.4):int(last_image.shape[1]*0.6)])
-        cv2.imwrite(str(Path(__file__).resolve().parent) + "/last.png", last_image[int(last_image.shape[0]*0.2):int(last_image.shape[0]*0.9), int(last_image.shape[1]*0.4):int(last_image.shape[1]*0.6)])
+        #cv2.imwrite(str(Path(__file__).resolve().parent) + "/last.png", last_image[int(last_image.shape[0]*0.2):int(last_image.shape[0]*0.9), int(last_image.shape[1]*0.4):int(last_image.shape[1]*0.6)])
 
         #cv2.imshow("dilated", dilated)
         cv2.imshow("differece", difference)
-        cv2.imwrite(str(Path(__file__).resolve().parent) + "/difference.png", difference)
+        #cv2.imwrite(str(Path(__file__).resolve().parent) + "/difference.png", difference)
         cv2.waitKey(0)
         
         cv2.destroyAllWindows()
