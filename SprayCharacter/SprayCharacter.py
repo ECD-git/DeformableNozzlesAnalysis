@@ -35,12 +35,12 @@ def Calibrate(imPath):
     peaks, properties = sp.signal.find_peaks(projection, height=4000)
     # num of peaks = num of mm
     scale_factor = (peaks[-1]-peaks[0])/(len(peaks)-1) #[pixels mm^-1]
-    scale_factor = scale_factor/10 #[pixels cm^-1]
+    scale_factor = scale_factor*10 #[pixels cm^-1]
     # adding the ruler and angular fractional erros 
     scale_factor_err = (0.5/40) + (1-np.cos(np.pi/18))
     
     # Display results
-    
+    '''
     plt.figure()
     plt.plot(projection, label='projection', linestyle='-')
     plt.scatter(peaks, projection[peaks], label='peaks')
@@ -55,8 +55,8 @@ def Calibrate(imPath):
     #cv2.imwrite(directory+"/ruler.png", body)
     plt.show()
     cv2.waitKey(0)
-    #cv2.destroyAllWindows()
-    
+    cv2.destroyAllWindows()
+    '''
     return scale_factor, scale_factor_err;
 
 def Characterise(imPath):
@@ -84,6 +84,24 @@ def main():
                 for result in os.listdir(directory+"/Sessions/"+session+'/'+nozzle):
                     # ie path to result is directory+"/Sessions/"+session+'/'+nozzle+'/'+result
                     print("---"+result)
+                    
+                    # Sort images and remove non image files
+                    test = directory+"/Sessions/"+session+'/'+nozzle+'/'+"3.5b1"+'/'
+                    images = sorted(os.listdir(test))
+                    images = [string for string in images if not string[0] == '.']
+                    
+                    # Find and isolate background
+                    background = cv2.imread(test+images[0])
+                    images = images[1:]
+
+                    # iterate over all images in file
+                    for image in images:
+                        diff = cv2.subtract(cv2.imread(test+image),background)
+                        cv2.imshow('diff', diff)
+                        cv2.waitKey(0)
+                        cv2.destroyAllWindows()
+                        
+                    break;
 
                     # VELOCITY
                     # - TIME ERROR IS HALF TIME STEP
