@@ -37,34 +37,85 @@ def Calibrate(imPath):
     scale_factor = (peaks[-1]-peaks[0])/(len(peaks)-1) #[pixels mm^-1]
     scale_factor = scale_factor*10 #[pixels cm^-1]
     # adding the ruler and angular fractional erros 
-    scale_factor_err = (0.5/40) + (1-np.cos(np.pi/18))
+    scale_factor_err = ((0.5/40) + (1-np.cos(np.pi/18)))*scale_factor
     
-    # Display results
-    '''
-    plt.figure()
-    plt.plot(projection, label='projection', linestyle='-')
-    plt.scatter(peaks, projection[peaks], label='peaks')
-    plt.title("Image Analysis Calibration")
-    plt.ylabel("horizontally summed pixel values")
-    plt.xlabel("pixels")
-    plt.legend()
-    
+    # Display results just for confirmation
     cv2.imshow("ruler", th2)
     #cv2.imwrite(directory+"/markings.png", th2)
     cv2.imshow('body', body)
     #cv2.imwrite(directory+"/ruler.png", body)
-    plt.show()
+    #plt.show()
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-    '''
+    
     return scale_factor, scale_factor_err;
 
 def Characterise(imPath):
     '''
     
     '''
+    # Sort images and remove non image files
+    images = sorted(os.listdir(imPath))
+    images = [string for string in images if not string[0] == '.']
+    
+    # Find and isolate background
+    background = cv2.imread(imPath+images[0])
+    total = cv2.cvtColor(cv2.imread(imPath+images[1]), cv2.COLOR_BGR2GRAY)
+    total = cv2.subtract(total, cv2.cvtColor(background,cv2.COLOR_BGR2GRAY))
+    total = cv2.GaussianBlur(total, (15, 15), 0)
+
+    images = images[2:]
+
+    # iterate over all images in file
+    for image in images: #[round(len(images)*0.5):round(len(images)*0.5)+1]:
+        diff = cv2.subtract(cv2.cvtColor(cv2.imread(imPath+image),cv2.COLOR_BGR2GRAY),cv2.cvtColor(background,cv2.COLOR_BGR2GRAY))
+        diff = cv2.GaussianBlur(diff, (15, 15), 0)
+
+        total = cv2.addWeighted(total, 1, diff, 1, 1)
+        #diff = cv2.Canny(diff, 50,100)
+        #diff=cv2.pyrMeanShiftFiltering(diff,20,30)
+        #total = cv2.adaptiveThreshold(total,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY_INV,11,2) 
+    # Threshold the result
+    ret, thresh = cv2.threshold(total, 175, 255, cv2.THRESH_BINARY)
+    # Find the inner bound of the light, and use it as a mask
+    circles = cv2.HoughCircles(
+        thresh,
+        cv2.HOUGH_GRADIENT,
+        dp=1,
+        minDist=1,      
+        param1=40,         
+        param2=20,      
+        minRadius=0,       
+        maxRadius=600    
+    )   
+    # Draw only the first detected circle + crop to it
+    display = cv2.cvtColor(total, cv2.COLOR_GRAY2BGR)
+    if circles is not None:
+        print("Light radius confirmed")
+        circles = np.uint16(np.around(circles))
+        x, y, r = circles[0][0]
+        cv2.circle(display, (x, y), r, (0, 255, 0), 2)  # Circle outline
+        cv2.circle(display, (x, y), 2, (0, 255, 0), 3)  #
+        # masking + cropping
+        maskr = round(r*0.95)
+        mask = np.zeros_like(thresh)
+        mask = cv2.circle(mask, (x,y), maskr, (255,255,255), -1)
+
+        xcrop = round(r*0.6)
+        thresh = cv2.bitwise_and(thresh, mask)[0:y+r,x-xcrop:x+xcrop]
+        
+    cv2.imshow('display', display)
+    cv2.imshow('total', thresh)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+    # VELOCITY
+    # - TIME ERROR IS HALF TIME STEP
+
     sprayAngle, breakLength, velocity = 0,0,0
     return sprayAngle, breakLength, velocity;
+
 
 def main():
     # Measurements are 0.5b to 3b in increments of 0.5 bar, times 3, so 3 sets of 6 measurements
@@ -76,35 +127,25 @@ def main():
     # Iterate over all sessions, calibrates, then iterates over all resultds
     for session in os.listdir(directory+"/Sessions/"):
         print("-"+session)
-        scale_factor, scale_factor_err = Calibrate(directory+"/Sessions/"+session+"/cal");
+        if os.path.exists(directory+"/Sessions/"+session+"/cal.txt"):
+            data = np.genfromtxt(directory+"/Sessions/"+session+"/cal.txt", delimiter=',')
+            scale_factor = data[0]
+            scale_factor_err = data[1]
+        else:
+            scale_factor, scale_factor_err = Calibrate(directory+"/Sessions/"+session+"/cal");
+            np.savetxt(directory+"/Sessions/"+session+"/cal.txt", np.array([scale_factor, scale_factor_err]), delimiter=',')
         print("Scale factor in pixels per cm", scale_factor)
         for nozzle in os.listdir(directory+"/Sessions/"+session):
-            if nozzle != "cal":
+            if nozzle != "cal" and nozzle != "cal.txt" and nozzle[0] != '.':
                 print("--" + nozzle)
                 for result in os.listdir(directory+"/Sessions/"+session+'/'+nozzle):
                     # ie path to result is directory+"/Sessions/"+session+'/'+nozzle+'/'+result
                     print("---"+result)
                     
-                    # Sort images and remove non image files
                     test = directory+"/Sessions/"+session+'/'+nozzle+'/'+"3.5b1"+'/'
-                    images = sorted(os.listdir(test))
-                    images = [string for string in images if not string[0] == '.']
-                    
-                    # Find and isolate background
-                    background = cv2.imread(test+images[0])
-                    images = images[1:]
-
-                    # iterate over all images in file
-                    for image in images:
-                        diff = cv2.subtract(cv2.imread(test+image),background)
-                        cv2.imshow('diff', diff)
-                        cv2.waitKey(0)
-                        cv2.destroyAllWindows()
+                    Characterise(test);
                         
                     break;
-
-                    # VELOCITY
-                    # - TIME ERROR IS HALF TIME STEP
                 
 
 if __name__ == "__main__":
