@@ -12,6 +12,34 @@ directory = str(Path(__file__).resolve().parent);
 step = 7; #[ms], should be lowest possible val for camera
 # ruler length = [AS VISIBLE ON IMAGE, this might change slightly across days so this may become obselete]
 
+def UnitVec(num):
+    return num/np.abs(num)
+
+def AngleAgainstNormal(x1,y1,x2,y2):
+    angle = np.arctan(np.abs(x1-x2)/np.abs(y1-y2))
+    if y1>y2 and x1<x2:
+        angle = -angle
+    elif y2>y1 and x2<x1:
+        angle = -angle
+    return angle
+
+def ExtendLine(x1,y1,x2,y2, length=200):
+    angle = AngleAgainstNormal(x1,y1,x2,y2)
+    dx = x1-x2
+    dy = y1-y2
+    length0 = np.sqrt(dx**2 + dx**2)
+    dx_normalized = dx / length0
+    dy_normalized = dy / length0
+
+    # Extend the line in both directions
+    x1_new = int(x1 - length * dx_normalized)
+    y1_new = int(y1 - length * dy_normalized)
+    x2_new = int(x2 + length * dx_normalized)
+    y2_new = int(y2 + length * dy_normalized)
+
+    return (x1_new, y1_new, x2_new, y2_new)
+
+
 def Calibrate(imPath):
     '''
     Takes provided tiff image (of a ruler over a back light) and returns a scale factor of pixels to mm from ruler
@@ -76,7 +104,7 @@ def Characterise(imPath):
         #diff=cv2.pyrMeanShiftFiltering(diff,20,30)
         #total = cv2.adaptiveThreshold(total,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY_INV,11,2) 
     # Threshold the result
-    ret, thresh = cv2.threshold(total, 175, 255, cv2.THRESH_BINARY)
+    ret, thresh = cv2.threshold(total, 160, 255, cv2.THRESH_BINARY)
     # Find the inner bound of the light, and use it as a mask
     circles = cv2.HoughCircles(
         thresh,
@@ -104,6 +132,32 @@ def Characterise(imPath):
         xcrop = round(r*0.6)
         thresh = cv2.bitwise_and(thresh, mask)[0:y+r,x-xcrop:x+xcrop]
         
+        # probabilistic hough line transform to detect lines
+        lines = cv2.HoughLinesP(thresh, 1, np.pi/180, 50, minLineLength=50, maxLineGap=20)
+        angles = []
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = AngleAgainstNormal(x1,y1,x2,y2)
+                angles.append(angle)
+                cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,0,255),2)
+
+        minMaxIndex = angles.index(min(angles)), angles.index(max(angles))
+        print("ANGLES = "+str(angles[minMaxIndex[0]]) +' '+str(angles[minMaxIndex[1]]))
+        for i in minMaxIndex:
+            x1,y1,x2,y2 = lines[i][0]
+            x1,y1,x2,y2 = ExtendLine(x1,y1,x2,y2)
+            cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,255,0),2)
+            cv2.circle(display, (x1+x-xcrop,y1), 2, (255, 0, 0), 3)
+
+    # TODO:
+    # - GET SLOPE, INTERCEPT, AND JOINING OF LINES
+    # - COMPUTE ANGLE BETWEEN THEN
+    # - GET MEAN LINE and find extension beyond joining point to top of image
+    #
+    #
+    
+    
     cv2.imshow('display', display)
     cv2.imshow('total', thresh)
     cv2.waitKey(0)
