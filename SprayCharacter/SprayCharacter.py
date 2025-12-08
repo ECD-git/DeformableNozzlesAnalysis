@@ -78,6 +78,25 @@ def Calibrate(imPath):
     
     return scale_factor, scale_factor_err;
 
+def ProcessImage(im):
+    # Local contrast enhancement
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    im = clahe.apply(im)
+    # Bilateral smoothing
+    im = cv2.bilateralFilter(im, 9, 75, 75)
+    ret, im = cv2.threshold(im, 40, 255, cv2.THRESH_BINARY)
+    return im
+
+def Gray(im):
+    # convert to grayscale
+    im = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+    return im
+
+def Color(im):
+    # convert to color
+    im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
+    return im
+
 def Characterise(imPath):
     '''
     
@@ -87,69 +106,68 @@ def Characterise(imPath):
     images = [string for string in images if not string[0] == '.']
     
     # Find and isolate background
-    background = cv2.imread(imPath+images[0])
-    total = cv2.cvtColor(cv2.imread(imPath+images[1]), cv2.COLOR_BGR2GRAY)
-    total = cv2.subtract(total, cv2.cvtColor(background,cv2.COLOR_BGR2GRAY))
-    total = cv2.GaussianBlur(total, (15, 15), 0)
+    background = Gray(cv2.imread(imPath+images[0]))
+    total = Gray(cv2.imread(imPath+images[1]))
+    total = cv2.subtract(total, background)
+    display = total; # An unprocessed copy for figures
+    total = ProcessImage(total)
 
     images = images[2:]
-
     # iterate over all images in file
     for image in images: #[round(len(images)*0.5):round(len(images)*0.5)+1]:
-        diff = cv2.subtract(cv2.cvtColor(cv2.imread(imPath+image),cv2.COLOR_BGR2GRAY),cv2.cvtColor(background,cv2.COLOR_BGR2GRAY))
-        diff = cv2.GaussianBlur(diff, (15, 15), 0)
+        diff = cv2.subtract(Gray(cv2.imread(imPath+image)),background)
+        display = cv2.addWeighted(display, 1, diff, 1, 0.5)
+        diff = ProcessImage(diff)
+        total = cv2.addWeighted(total, 1, diff, 0.5, 0.5)
+    display = Color(display)    
 
-        total = cv2.addWeighted(total, 1, diff, 1, 1)
-        #diff = cv2.Canny(diff, 50,100)
-        #diff=cv2.pyrMeanShiftFiltering(diff,20,30)
-        #total = cv2.adaptiveThreshold(total,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY_INV,11,2) 
-    # Threshold the result
-    ret, thresh = cv2.threshold(total, 160, 255, cv2.THRESH_BINARY)
     # Find the inner bound of the light, and use it as a mask
     circles = cv2.HoughCircles(
-        thresh,
+        total,
         cv2.HOUGH_GRADIENT,
         dp=1,
         minDist=1,      
         param1=40,         
         param2=20,      
-        minRadius=0,       
-        maxRadius=600    
-    )   
+        minRadius=450,       
+        maxRadius=550) 
     # Draw only the first detected circle + crop to it
-    display = cv2.cvtColor(total, cv2.COLOR_GRAY2BGR)
     if circles is not None:
         print("Light radius confirmed")
         circles = np.uint16(np.around(circles))
         x, y, r = circles[0][0]
+        print("RADIUS", r)
         cv2.circle(display, (x, y), r, (0, 255, 0), 2)  # Circle outline
         cv2.circle(display, (x, y), 2, (0, 255, 0), 3)  #
-        # masking + cropping
-        maskr = round(r*0.95)
-        mask = np.zeros_like(thresh)
-        mask = cv2.circle(mask, (x,y), maskr, (255,255,255), -1)
-
-        xcrop = round(r*0.6)
-        thresh = cv2.bitwise_and(thresh, mask)[0:y+r,x-xcrop:x+xcrop]
+        # masking 
+        maskradius = round(r*0.99) # we crop just below the radius
+        circlemask = np.zeros_like(total)
+        circlemask = cv2.circle(circlemask, (x,y), maskradius, (255,255,255), -1)
+        maskx = round(r*0.6) 
+        rectanglemask = np.zeros_like(total)
+        rectanglemask = cv2.rectangle(rectanglemask, (x-maskx,0),(x+maskx,y+r), (255,255,255), -1)
+        total = cv2.bitwise_and(total, circlemask)
+        total = cv2.bitwise_and(total,rectanglemask)#[0:y+r,x-xcrop:x+xcrop])
         
-        # probabilistic hough line transform to detect lines
-        lines = cv2.HoughLinesP(thresh, 1, np.pi/180, 50, minLineLength=50, maxLineGap=20)
-        angles = []
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                angle = AngleAgainstNormal(x1,y1,x2,y2)
-                angles.append(angle)
-                cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,0,255),2)
 
-        minMaxIndex = angles.index(min(angles)), angles.index(max(angles))
-        print("ANGLES = "+str(angles[minMaxIndex[0]]) +' '+str(angles[minMaxIndex[1]]))
-        for i in minMaxIndex:
-            x1,y1,x2,y2 = lines[i][0]
-            x1,y1,x2,y2 = ExtendLine(x1,y1,x2,y2)
-            cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,255,0),2)
-            cv2.circle(display, (x1+x-xcrop,y1), 2, (255, 0, 0), 3)
-
+    # probabilistic hough line transform to detect lines
+    lines = cv2.HoughLinesP(total, 1, np.pi/180, 50, minLineLength=70, maxLineGap=20)
+    angles = []
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            angle = AngleAgainstNormal(x1,y1,x2,y2)
+            angles.append(angle)
+            cv2.line(display, (x1,y1), (x2,y2), (0,0,255),1)
+    '''
+    minMaxIndex = angles.index(min(angles)), angles.index(max(angles))
+    print("ANGLES = "+str(angles[minMaxIndex[0]]) +' '+str(angles[minMaxIndex[1]]))
+    for i in minMaxIndex:
+        x1,y1,x2,y2 = lines[i][0]
+        x1,y1,x2,y2 = ExtendLine(x1,y1,x2,y2)
+        cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,255,0),2)
+        cv2.circle(display, (x1+x-xcrop,y1), 2, (255, 0, 0), 3)
+    '''
     # TODO:
     # - GET SLOPE, INTERCEPT, AND JOINING OF LINES
     # - COMPUTE ANGLE BETWEEN THEN
@@ -159,7 +177,7 @@ def Characterise(imPath):
     
     
     cv2.imshow('display', display)
-    cv2.imshow('total', thresh)
+    cv2.imshow('total', total)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
