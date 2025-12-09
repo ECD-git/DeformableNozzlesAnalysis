@@ -86,7 +86,7 @@ def Color(im):
     im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
     return im
 
-def GetAngle(top, right, left):
+def GetAngle(top, right, left, rightErr, leftErr):
     '''
     Docstring for GetAngle
     
@@ -95,10 +95,20 @@ def GetAngle(top, right, left):
     :param x2: Description
     :param y2: Description
     '''
-    
-    angleA = np.rad2deg(np.arctan((top[0]-right[0])/(right[1]-top[1])))
-    angleB = np.rad2deg(np.arctan((top[0]-left[0])/(left[1]-top[1])))
-    return np.abs(angleA) + np.abs(angleB)
+    OppA = (top[0]-right[0])
+    AdjA = (right[1]-top[1])
+    angleA, angleAErr = GetTanAngle(OppA, AdjA, rightErr[0], rightErr[1])
+    OppB = (top[0]-left[0])
+    AdjB = (left[1]-top[1])
+    angleB, angleBErr = GetTanAngle(OppB, AdjB, leftErr[0], leftErr[1])
+    return np.abs(angleA) + np.abs(angleB), angleAErr+angleBErr
+
+def GetTanAngle(opp, adj, oppErr, adjErr):
+    x = opp/adj
+    xErr = np.sqrt((oppErr/opp)**2 + (adjErr/adj)**2)
+    angleErr = np.rad2deg(xErr/(x**2+1))
+    angle = np.rad2deg(np.arctan(opp/adj))
+    return angle, angleErr
 
 def GetTopPoint(x1,y1,x2,y2):
     '''
@@ -122,21 +132,36 @@ def MeanTopCluster(positions, minXdiff = 10, minYdiff = 15):
     :param minXdiff: Description
     :param minYdiff: Description
     '''
+    # sort in y dir from low to high
     sorted = positions[positions[:, 1].argsort()]
     cluster = []
+
     for i in range(len(sorted)):
         if np.abs(sorted[i,1] - sorted[i+1,1]) < minYdiff:
             cluster.append(sorted[i])
         else:
             break;
     cluster = np.array(cluster)
-    return [round(np.mean(cluster, axis=0)[0]),round(cluster[-1,1])]
+    # error on x is the std of the mean, err on y is basically a pixel and is 0
+    return [round(np.mean(cluster, axis=0)[0]),round(cluster[-1,1])], [np.sqrt(np.std(cluster, axis=0)[0]),0]
+
+def MeanPos(position):
+    '''
+    Docstring for MeanPos
+    
+    :param position: x1,y1,x2,y2
+    '''
+    x1,y1,x2,y2 = position[0]
+    mean = [round((x1+x2)/2),round((y1+y2)/2)]
+    err = [np.abs(x1-x2)/2,np.abs(y1-y2)/2]
+    return mean, err
 
 def Characterise(imPath):
     '''
     Docstring for Characterise
     
     :param imPath: Description
+    :out sprayAngle: The angle of the spray from the nozzle tip, error from the angular error of the houghLines function.
     '''
     # Sort images and remove non image files
     images = sorted(os.listdir(imPath))
@@ -189,7 +214,8 @@ def Characterise(imPath):
         total = cv2.bitwise_and(total,rectanglemask)#[0:y+r,x-xcrop:x+xcrop])
         
     # probabilistic hough line transform to detect lines
-    lines = cv2.HoughLinesP(total, 1, np.pi/180, 50, minLineLength=70, maxLineGap=20)
+    HoughError = np.pi/180
+    lines = cv2.HoughLinesP(total, 1, HoughError, 50, minLineLength=70, maxLineGap=20)
     positions = []
     if lines is not None:
         for line in lines:
@@ -202,9 +228,14 @@ def Characterise(imPath):
     positions = np.array(positions)
     
     # Need to account for the cluster of line points at the top of the image due to the geom of the nozzle tip
-    top = MeanTopCluster(positions)
-    left = positions[np.where(positions[:,0] == np.min(positions[:,0]))][0]
-    right = positions[np.where(positions[:,0] == np.max(positions[:,0]))][0]
+    top, topErr = MeanTopCluster(positions) # this is eff the nozzle tip,
+    # if wanna try get a breakup length, here is the best point
+
+
+    leftInd = np.where(positions[:,0] == np.min(positions[:,0]))
+    rightInd = np.where(positions[:,0] == np.max(positions[:,0]))
+    left, leftErr = MeanPos(lines[leftInd][0])
+    right, rightErr = MeanPos(lines[rightInd][0])
     
     # Draw all these points of interest
     cv2.circle(display, (top), 1, (0,255,0), 8)
@@ -213,20 +244,11 @@ def Characterise(imPath):
     cv2.line(display, left, top, (0,0,255),3)
     cv2.line(display, right, top, (0,0,255),3)
 
-    sprayAngle = GetAngle(top, right, left)
-    cv2.putText(display, "Angle = {0:3.2f}".format(sprayAngle),(top[0]+25, top[1]+50),cv2.FONT_HERSHEY_SIMPLEX,2,(0,255,255),3)
-
-    '''
-    minMaxIndex = angles.index(min(angles)), angles.index(max(angles))
-    print("ANGLES = "+str(angles[minMaxIndex[0]]) +' '+str(angles[minMaxIndex[1]]))
-    for i in minMaxIndex:
-        x1,y1,x2,y2 = lines[i][0]
-        x1,y1,x2,y2 = ExtendLine(x1,y1,x2,y2)
-        cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,255,0),2)
-        cv2.circle(display, (x1+x-xcrop,y1), 2, (255, 0, 0), 3)
-    '''
+    sprayAngle, sprayAngleErr = GetAngle(top, right, left, rightErr, leftErr)
+    cv2.putText(display, "Angle = {0:3.2f} +- {1:3.2f}".format(sprayAngle,sprayAngleErr),(top[0]+25, top[1]+50),cv2.FONT_HERSHEY_SIMPLEX,2,(0,255,255),3)
     
     cv2.imshow('display', display)
+    cv2.imwrite(directory+"/test.png", display)
     #cv2.imshow('total', total)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
@@ -243,8 +265,8 @@ def main():
     # each measurement consists of the spray angle,breakup length and velocity for that pressure/iteration
     # array = numpy.array(["", numpy.empty((3,6), dtype=object)],dtype=object)
     # result = numpy.array([angle, length, velocity])
+    
     pressures = np.array([0.5,1.0,1.5,2.0,2.5,3.0])
-
     # Iterate over all sessions, calibrates, then iterates over all resultds
     for session in os.listdir(directory+"/Sessions/"):
         print("-"+session)
@@ -267,8 +289,6 @@ def main():
                     Characterise(test);
                         
                     break;
-                
-
 if __name__ == "__main__":
     main();
 
