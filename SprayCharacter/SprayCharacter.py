@@ -12,37 +12,11 @@ directory = str(Path(__file__).resolve().parent);
 step = 7; #[ms], should be lowest possible val for camera
 # ruler length = [AS VISIBLE ON IMAGE, this might change slightly across days so this may become obselete]
 
-def UnitVec(num):
-    return num/np.abs(num)
-
-def AngleAgainstNormal(x1,y1,x2,y2):
-    angle = np.arctan(np.abs(x1-x2)/np.abs(y1-y2))
-    if y1>y2 and x1<x2:
-        angle = -angle
-    elif y2>y1 and x2<x1:
-        angle = -angle
-    return angle
-
-def ExtendLine(x1,y1,x2,y2, length=200):
-    angle = AngleAgainstNormal(x1,y1,x2,y2)
-    dx = x1-x2
-    dy = y1-y2
-    length0 = np.sqrt(dx**2 + dx**2)
-    dx_normalized = dx / length0
-    dy_normalized = dy / length0
-
-    # Extend the line in both directions
-    x1_new = int(x1 - length * dx_normalized)
-    y1_new = int(y1 - length * dy_normalized)
-    x2_new = int(x2 + length * dx_normalized)
-    y2_new = int(y2 + length * dy_normalized)
-
-    return (x1_new, y1_new, x2_new, y2_new)
-
-
 def Calibrate(imPath):
     '''
-    Takes provided tiff image (of a ruler over a back light) and returns a scale factor of pixels to mm from ruler
+    Docstring for Calibrate
+    
+    :param imPath: Description
     '''
     print("--cal")
     images = sorted(os.listdir(imPath))
@@ -79,6 +53,11 @@ def Calibrate(imPath):
     return scale_factor, scale_factor_err;
 
 def ProcessImage(im):
+    '''
+    Docstring for ProcessImage
+    
+    :param im: Description
+    '''
     # Local contrast enhancement
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     im = clahe.apply(im)
@@ -88,18 +67,76 @@ def ProcessImage(im):
     return im
 
 def Gray(im):
+    '''
+    Docstring for Gray
+    
+    :param im: Description
+    '''
     # convert to grayscale
     im = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
     return im
 
 def Color(im):
+    '''
+    Docstring for Color
+    
+    :param im: Description
+    '''
     # convert to color
     im = cv2.cvtColor(im, cv2.COLOR_GRAY2BGR)
     return im
 
-def Characterise(imPath):
+def GetAngle(top, right, left):
+    '''
+    Docstring for GetAngle
+    
+    :param x1: Description
+    :param y1: Description
+    :param x2: Description
+    :param y2: Description
     '''
     
+    angleA = np.rad2deg(np.arctan((top[0]-right[0])/(right[1]-top[1])))
+    angleB = np.rad2deg(np.arctan((top[0]-left[0])/(left[1]-top[1])))
+    return np.abs(angleA) + np.abs(angleB)
+
+def GetTopPoint(x1,y1,x2,y2):
+    '''
+    Docstring for GetMidPoint
+    
+    :param x1: Description
+    :param y1: Description
+    :param x2: Description
+    :param y2: Description
+    '''
+    if y1 < y2:
+        return [x1,y1]
+    else:
+        return [x2,y2]
+
+def MeanTopCluster(positions, minXdiff = 10, minYdiff = 15):
+    '''
+    Docstring for MeanTopCluster
+    
+    :param positions: Description
+    :param minXdiff: Description
+    :param minYdiff: Description
+    '''
+    sorted = positions[positions[:, 1].argsort()]
+    cluster = []
+    for i in range(len(sorted)):
+        if np.abs(sorted[i,1] - sorted[i+1,1]) < minYdiff:
+            cluster.append(sorted[i])
+        else:
+            break;
+    cluster = np.array(cluster)
+    return [round(np.mean(cluster, axis=0)[0]),round(cluster[-1,1])]
+
+def Characterise(imPath):
+    '''
+    Docstring for Characterise
+    
+    :param imPath: Description
     '''
     # Sort images and remove non image files
     images = sorted(os.listdir(imPath))
@@ -131,6 +168,7 @@ def Characterise(imPath):
         param2=20,      
         minRadius=450,       
         maxRadius=550) 
+    
     # Draw only the first detected circle + crop to it
     if circles is not None:
         print("Light radius confirmed")
@@ -139,6 +177,7 @@ def Characterise(imPath):
         print("RADIUS", r)
         cv2.circle(display, (x, y), r, (0, 255, 0), 2)  # Circle outline
         cv2.circle(display, (x, y), 2, (0, 255, 0), 3)  #
+        
         # masking 
         maskradius = round(r*0.99) # we crop just below the radius
         circlemask = np.zeros_like(total)
@@ -149,16 +188,34 @@ def Characterise(imPath):
         total = cv2.bitwise_and(total, circlemask)
         total = cv2.bitwise_and(total,rectanglemask)#[0:y+r,x-xcrop:x+xcrop])
         
-
     # probabilistic hough line transform to detect lines
     lines = cv2.HoughLinesP(total, 1, np.pi/180, 50, minLineLength=70, maxLineGap=20)
-    angles = []
+    positions = []
     if lines is not None:
         for line in lines:
             x1, y1, x2, y2 = line[0]
-            angle = AngleAgainstNormal(x1,y1,x2,y2)
-            angles.append(angle)
-            cv2.line(display, (x1,y1), (x2,y2), (0,0,255),1)
+            position = GetTopPoint(x1,y1,x2,y2)
+            positions.append(position)
+            cv2.circle(display, (position[0], position[1]), 1, (255,0,0), 3)
+    
+    # make angles and positions a numpy array
+    positions = np.array(positions)
+    
+    # Need to account for the cluster of line points at the top of the image due to the geom of the nozzle tip
+    top = MeanTopCluster(positions)
+    left = positions[np.where(positions[:,0] == np.min(positions[:,0]))][0]
+    right = positions[np.where(positions[:,0] == np.max(positions[:,0]))][0]
+    
+    # Draw all these points of interest
+    cv2.circle(display, (top), 1, (0,255,0), 8)
+    cv2.circle(display, (left), 1, (0,255,0), 8)
+    cv2.circle(display, (right), 1, (0,255,0), 8)
+    cv2.line(display, left, top, (0,0,255),3)
+    cv2.line(display, right, top, (0,0,255),3)
+
+    sprayAngle = GetAngle(top, right, left)
+    cv2.putText(display, "Angle = {0:3.2f}".format(sprayAngle),(top[0]+25, top[1]+50),cv2.FONT_HERSHEY_SIMPLEX,2,(0,255,255),3)
+
     '''
     minMaxIndex = angles.index(min(angles)), angles.index(max(angles))
     print("ANGLES = "+str(angles[minMaxIndex[0]]) +' '+str(angles[minMaxIndex[1]]))
@@ -168,19 +225,11 @@ def Characterise(imPath):
         cv2.line(display, (x1+x-xcrop,y1), (x2+x-xcrop,y2), (0,255,0),2)
         cv2.circle(display, (x1+x-xcrop,y1), 2, (255, 0, 0), 3)
     '''
-    # TODO:
-    # - GET SLOPE, INTERCEPT, AND JOINING OF LINES
-    # - COMPUTE ANGLE BETWEEN THEN
-    # - GET MEAN LINE and find extension beyond joining point to top of image
-    #
-    #
-    
     
     cv2.imshow('display', display)
-    cv2.imshow('total', total)
+    #cv2.imshow('total', total)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-
 
     # VELOCITY
     # - TIME ERROR IS HALF TIME STEP
