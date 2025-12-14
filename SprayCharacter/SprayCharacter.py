@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt;
 
 # Constants/paths
 directory = str(Path(__file__).resolve().parent);
-step = 7; #[ms], should be lowest possible val for camera
+global step; step = 0.007; #[ms], should be lowest possible val for camera
 # ruler length = [AS VISIBLE ON IMAGE, this might change slightly across days so this may become obselete]
 
 def Calibrate(imPath):
@@ -37,7 +37,7 @@ def Calibrate(imPath):
     peaks, properties = sp.signal.find_peaks(projection, height=4000)
     # num of peaks = num of mm
     scale_factor = (peaks[-1]-peaks[0])/(len(peaks)-1) #[pixels mm^-1]
-    scale_factor = scale_factor*10 #[pixels cm^-1]
+    scale_factor = scale_factor*1000 #[pixels m^-1]
     # adding the ruler and angular fractional erros 
     scale_factor_err = ((0.5/40) + (1-np.cos(np.pi/18)))*scale_factor
     
@@ -101,11 +101,11 @@ def GetAngle(top, right, left, rightErr, leftErr):
     OppB = (top[0]-left[0])
     AdjB = (left[1]-top[1])
     angleB, angleBErr = GetTanAngle(OppB, AdjB, leftErr[0], leftErr[1])
-    return np.abs(angleA) + np.abs(angleB), angleAErr+angleBErr
+    return np.abs(angleA) + np.abs(angleB), np.mean([angleAErr,angleBErr])
 
 def GetTanAngle(opp, adj, oppErr, adjErr):
     x = opp/adj
-    xErr = np.sqrt((oppErr/opp)**2 + (adjErr/adj)**2)
+    xErr = oppErr/opp
     angleErr = np.rad2deg(xErr/(x**2+1))
     angle = np.rad2deg(np.arctan(opp/adj))
     return angle, angleErr
@@ -153,10 +153,32 @@ def MeanPos(position):
     '''
     x1,y1,x2,y2 = position[0]
     mean = [round((x1+x2)/2),round((y1+y2)/2)]
-    err = [np.abs(x1-x2)/2,np.abs(y1-y2)/2]
+    err = [np.sqrt(np.abs(x1-x2)/2),np.sqrt(np.abs(y1-y2)/2)]
     return mean, err
 
-def Characterise(imPath):
+def Mask(im, r, x, y):
+    maskradius = round(r*0.99) # we crop just below the radius
+    circlemask = np.zeros_like(im)
+    circlemask = cv2.circle(circlemask, (x,y), maskradius, (255,255,255), -1)
+    maskx = round(r*0.6) 
+    rectanglemask = np.zeros_like(im)
+    rectanglemask = cv2.rectangle(rectanglemask, (x-maskx,0),(x+maskx,y+r), (255,255,255), -1)
+    im = cv2.bitwise_and(im, circlemask)
+    im = cv2.bitwise_and(im,rectanglemask)#[0:y+r,x-xcrop:x+xcrop])
+    return im
+
+def GetContourPosition(cnt):
+    M = cv2.moments(cnt)
+    center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+    return center
+
+def GetAbsDist(pos1, pos2):
+    x = np.abs(pos1[0]-pos2[0])
+    y = np.abs(pos1[1]-pos2[1])
+    #print("DIST =",np.sqrt(x**2 + y**2))
+    return np.sqrt(x**2 + y**2)
+
+def Characterise(imPath, scale, scaleErr):
     '''
     Docstring for Characterise
     
@@ -191,28 +213,29 @@ def Characterise(imPath):
         minDist=1,      
         param1=40,         
         param2=20,      
-        minRadius=450,       
-        maxRadius=550) 
+        minRadius=350,       
+        maxRadius=2000) 
     
     # Draw only the first detected circle + crop to it
     if circles is not None:
         print("Light radius confirmed")
         circles = np.uint16(np.around(circles))
         x, y, r = circles[0][0]
+        if r>550:
+            r = 500
         print("RADIUS", r)
         cv2.circle(display, (x, y), r, (0, 255, 0), 2)  # Circle outline
         cv2.circle(display, (x, y), 2, (0, 255, 0), 3)  #
         
         # masking 
-        maskradius = round(r*0.99) # we crop just below the radius
-        circlemask = np.zeros_like(total)
-        circlemask = cv2.circle(circlemask, (x,y), maskradius, (255,255,255), -1)
-        maskx = round(r*0.6) 
-        rectanglemask = np.zeros_like(total)
-        rectanglemask = cv2.rectangle(rectanglemask, (x-maskx,0),(x+maskx,y+r), (255,255,255), -1)
-        total = cv2.bitwise_and(total, circlemask)
-        total = cv2.bitwise_and(total,rectanglemask)#[0:y+r,x-xcrop:x+xcrop])
-        
+        total = Mask(total, r, x, y)
+
+    '''
+    cv2.imshow('display', display)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    '''
+
     # probabilistic hough line transform to detect lines
     HoughError = np.pi/180
     lines = cv2.HoughLinesP(total, 1, HoughError, 50, minLineLength=70, maxLineGap=20)
@@ -222,7 +245,7 @@ def Characterise(imPath):
             x1, y1, x2, y2 = line[0]
             position = GetTopPoint(x1,y1,x2,y2)
             positions.append(position)
-            cv2.circle(display, (position[0], position[1]), 1, (255,0,0), 3)
+            
     
     # make angles and positions a numpy array
     positions = np.array(positions)
@@ -231,20 +254,41 @@ def Characterise(imPath):
     top, topErr = MeanTopCluster(positions) # this is eff the nozzle tip,
     # if wanna try get a breakup length, here is the best point
 
+    # remove all points above the circle center point
+    ind = np.where(positions[:,1] < y)
+    positions = np.delete(positions,ind , axis=0)
+    lines = np.delete(lines, ind, axis=0)
+
+    # remove the left most point (avoid anomalies)
+    for i in range(2):
+        leftInd = np.where(positions[:,0] == np.min(positions[:,0]))
+        positions = np.delete(positions,leftInd , axis=0)
+        lines = np.delete(lines, leftInd, axis=0)
+
+    for i in range(5):
+        rightInd = np.where(positions[:,0] == np.max(positions[:,0]))
+        positions = np.delete(positions,rightInd , axis=0)
+        lines = np.delete(lines, rightInd, axis=0)
+
+    for pos in positions:
+        cv2.circle(display, (pos[0], pos[1]), 1, (255,0,0), 3)
+
+
 
     leftInd = np.where(positions[:,0] == np.min(positions[:,0]))
     rightInd = np.where(positions[:,0] == np.max(positions[:,0]))
     left, leftErr = MeanPos(lines[leftInd][0])
     right, rightErr = MeanPos(lines[rightInd][0])
-    
+    sprayAngle, sprayAngleErr = GetAngle(top, right, left, rightErr, leftErr)
+
+    '''
     # Draw all these points of interest
     cv2.circle(display, (top), 1, (0,255,0), 8)
     cv2.circle(display, (left), 1, (0,255,0), 8)
     cv2.circle(display, (right), 1, (0,255,0), 8)
     cv2.line(display, left, top, (0,0,255),3)
     cv2.line(display, right, top, (0,0,255),3)
-
-    sprayAngle, sprayAngleErr = GetAngle(top, right, left, rightErr, leftErr)
+    
     cv2.putText(display, "Angle = {0:3.2f} +- {1:3.2f}".format(sprayAngle,sprayAngleErr),(top[0]+25, top[1]+50),cv2.FONT_HERSHEY_SIMPLEX,2,(0,255,255),3)
     
     cv2.imshow('display', display)
@@ -252,9 +296,80 @@ def Characterise(imPath):
     #cv2.imshow('total', total)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-
+    '''
     # VELOCITY
-    # - TIME ERROR IS HALF TIME STEP
+    boundary = round((y+r)*0.75) #set the boundary to be about 75% of the distance from the nozzle tip to the edge of the light ring, to ensure all droplets are caught
+    # Iterate over the first 8-10 images
+    lastJetPos, lastJetPosErr, firstJetPos, firstJetPosErr = [], [], [], []
+    for i in range(len(images[:8])):
+        diff = cv2.subtract(Gray(cv2.imread(imPath+images[i])),background)
+        diff = ProcessImage(diff)
+        diff = Mask(diff, r, x, y)
+        
+        contours, hierarchy = cv2.findContours(diff, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # sort the contours by area
+        contoursSorted = sorted(contours, key=lambda x: cv2.contourArea(x))
+        # filter by area
+        minArea = 300
+        contoursSorted = [contour for contour in contours if cv2.contourArea(contour) > minArea]
+        
+        diff = Color(diff)
+        cv2.drawContours(diff, contoursSorted, -1, (0, 0, 255), 2)
+
+        # sort contours by y value in    
+        contoursSorted = sorted(contoursSorted, key=lambda x: GetContourPosition(x)[1], reverse=True)
+            
+        # Display
+        
+        # Quick velocity cal, if its more than 5, assume anomalous and remove
+        if i > 0:
+            for j in range(2):
+                print(GetAbsDist(GetContourPosition(contoursSorted[0]), top)/(i*step*scale))
+                if GetAbsDist(GetContourPosition(contoursSorted[0]), top)/(i*step*scale) > 5:
+                    contoursSorted = contoursSorted[1:]
+        cv2.circle(diff, GetContourPosition(contoursSorted[0]), 50, (0,0,255),5)
+
+        for cnt in contoursSorted:
+            cv2.circle(diff, GetContourPosition(cnt), 3, (255,0,0),3)
+        cv2.circle(diff, (top), boundary, (0, 255, 0), 2)  # Circle outline
+        cv2.circle(diff, (top), 2, (0, 255, 0), 3)  #
+        
+        cv2.imshow(image, diff)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        
+        # check if lowest contour is outside of bounds
+        if GetAbsDist(GetContourPosition(contoursSorted[0]), top) > boundary:
+            print(i)
+            lastframe = i
+            lastJetPos = GetContourPosition(contoursSorted[0])
+            x,y,w,h = cv2.boundingRect(contoursSorted[0])
+            lastJetPosErr = [w/2, h/2]
+            break;
+        if i == 0:
+            firstJetPos = GetContourPosition(contoursSorted[0])
+            #x,y,w,h = cv2.boundingRect(contoursSorted[0])
+            #firstJetPosErr = [w/2,h/2]
+
+    timeStep = 0.007 #[s]
+    time = i * timeStep
+    dist = GetAbsDist(lastJetPos, firstJetPos)
+    distErr = np.sqrt(lastJetPosErr[0]**2 + lastJetPosErr[1]**2)
+    velocity = (dist/scale)/time 
+    VelocityErr = (distErr)/(time*scale) * (velocity * (scaleErr/scale))
+
+    # Display results
+    cv2.line(display, left, top, (0,0,255),3)
+    cv2.line(display, right, top, (0,0,255),3)
+    
+    cv2.putText(display, "Angle = {0:3.2f} +- {1:3.2f} deg".format(sprayAngle,sprayAngleErr),(top[0]-50, top[1]+50),cv2.FONT_HERSHEY_SIMPLEX,2,(0,255,255),3)
+    cv2.putText(display, "Vel = {0:3.2f} +- {1:3.2f} m/s".format(velocity, VelocityErr), (right[0]-50, right[1]+50), cv2.FONT_HERSHEY_SIMPLEX,2,(0,255,255),3)
+
+    #cv2.line(diff, lastJetPos, firstJetPos, (255,0,255), 3)
+    cv2.imshow(image, display)
+    cv2.imwrite(directory+"/"+"Result"+".png", display)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
     sprayAngle, breakLength, velocity = 0,0,0
     return sprayAngle, breakLength, velocity;
@@ -277,7 +392,7 @@ def main():
         else:
             scale_factor, scale_factor_err = Calibrate(directory+"/Sessions/"+session+"/cal");
             np.savetxt(directory+"/Sessions/"+session+"/cal.txt", np.array([scale_factor, scale_factor_err]), delimiter=',')
-        print("Scale factor in pixels per cm", scale_factor)
+        print("Scale factor in pixels per m", scale_factor)
         for nozzle in os.listdir(directory+"/Sessions/"+session):
             if nozzle != "cal" and nozzle != "cal.txt" and nozzle[0] != '.':
                 print("--" + nozzle)
@@ -285,8 +400,8 @@ def main():
                     # ie path to result is directory+"/Sessions/"+session+'/'+nozzle+'/'+result
                     print("---"+result)
                     
-                    test = directory+"/Sessions/"+session+'/'+nozzle+'/'+"3.5b1"+'/'
-                    Characterise(test);
+                    test = directory+"/Sessions/"+session+'/'+nozzle+'/'+"0.5b1"+'/'
+                    Characterise(test, scale_factor, scale_factor_err);
                         
                     break;
 if __name__ == "__main__":
